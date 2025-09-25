@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>バジィアカデミー｜四字熟語 並べ替えクイズ（単独モジュール完全版）</title>
+<style>
+  :root{
+    --bg:#f7f7fb; --fg:#111; --muted:#666; --card:#fff; --accent:#111; --danger:#e24a4a; --ok:#2f9e44;
+    --radius:18px; --shadow:0 10px 28px rgba(0,0,0,.08);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:var(--fg);}
+  .wrap{margin:0 auto; width:100%; max-width:420px; padding:16px}
+  .card{background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); padding:16px}
+  h1{font-size:18px; margin:0 0 10px}
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  .pill{padding:6px 10px; background:#eee; border-radius:999px; font-size:11px}
+  .meta{display:flex; justify-content:space-between; align-items:center; gap:8px}
+  .small{font-size:12px; color:var(--muted)}
+  .timerWrap{height:10px; background:#eee; border-radius:999px; overflow:hidden; flex:1}
+  .timerBar{height:100%; width:100%; background:var(--accent); transition:width .1s linear}
+
+  .prompt{font-size:16px; line-height:1.6; margin:10px 0 8px; word-break:keep-all}
+  .slots{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:8px 0 12px}
+  .slot{height:52px; border:2px dashed #ddd; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:22px; background:#fafafa}
+
+  /* ▼ モバイル縦型：デフォルトは2列。画面幅が広がるほど列数を増やす */
+  .tiles{display:grid; grid-template-columns:repeat(2,1fr); gap:8px}
+  .tile{appearance:none; border:1px solid #ddd; background:#fff; border-radius:12px; padding:14px 0; min-height:56px; text-align:center; font-size:22px; cursor:pointer; user-select:none; touch-action:manipulation; transition:transform .04s ease, background .2s}
+  .tile:active{transform:scale(.98)}
+  .tile.used{opacity:.35; pointer-events:none}
+  .tile.correctPulse{animation:pulse .4s}
+  @keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.06)}100%{transform:scale(1)}}
+
+  .foot{margin-top:14px; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap}
+  .btn{border:1px solid #ddd; background:#fff; padding:10px 12px; border-radius:10px; cursor:pointer; font-size:14px}
+  .btn.primary{border-color:#111; background:#111; color:#fff}
+  .btn.ghost{background:#fff}
+  .btn:disabled{opacity:.5; cursor:not-allowed}
+
+  .status.ok{color:var(--ok)}
+  .status.ng{color:var(--danger)}
+  .explain{margin-top:8px; font-size:13px; color:var(--muted)}
+
+  /* モーダル用オーバーレイ（統合時に流用可） */
+  .overlay{position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; align-items:center; justify-content:center; padding:16px}
+  .overlay.active{display:flex}
+  .modal{width:min(420px,100%)}
+
+  /* 画面幅が広がったら列数UP（タブレット以上） */
+  @media (min-width:480px){ .wrap{max-width:520px} .tiles{grid-template-columns:repeat(3,1fr)} }
+  @media (min-width:768px){ .wrap{max-width:720px} .tiles{grid-template-columns:repeat(6,1fr)} h1{font-size:20px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>四字熟語 並べ替えクイズ（単独）</h1>
+
+    <div class="row small" id="demoPanel">
+      <span class="pill">デモ操作</span>
+      <button class="btn" id="startBtn">ランダムで1問</button>
+      <button class="btn" id="hardBtn">難しめ</button>
+      <button class="btn" id="seedBtn">Seed: <span id="seedVal">auto</span></button>
+      <label class="small"><input type="checkbox" id="retryChk"> 1回だけリトライ許可</label>
+    </div>
+
+    <div class="meta" style="margin-top:8px">
+      <div class="small" id="status">Ready</div>
+      <div class="timerWrap"><div id="timerBar" class="timerBar"></div></div>
+    </div>
+
+    <div class="prompt" id="prompt">お題がここに表示されます。</div>
+    <div class="slots" id="slots"></div>
+    <div class="tiles" id="tiles"></div>
+
+    <div class="foot">
+      <button class="btn ghost" id="resetBtn">リセット</button>
+      <button class="btn primary" id="nextBtn" disabled>次の問題</button>
+    </div>
+
+    <div class="explain" id="explain"></div>
+  </div>
+</div>
+
+<!-- 統合時に使えるオーバーレイ雛形（このサンプルでは未使用） -->
+<div class="overlay" id="overlay">
+  <div class="modal card" id="modal"></div>
+</div>
+
+<script>
+/******************** RNG（シード固定可能） ********************/
+class RNG {
+  constructor(seed){ this.seed = (typeof seed==='number')?seed>>>0: (Math.random()*2**32)>>>0 }
+  next(){ let x=this.seed||123456789; x^=x<<13; x^=x>>>17; x^=x<<5; this.seed=x>>>0; return this.seed/4294967296 }
+  pick(arr){ return arr[Math.floor(this.next()*arr.length)] }
+  shuffle(arr){ const a=arr.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(this.next()*(i+1)); [a[i],a[j]]=[a[j],a[i]] } return a }
+}
+
+/******************** イベントエミッタ ********************/
+class Emitter { constructor(){this.map=new Map()} on(e,f){(this.map.get(e)??this.map.set(e,[]).get(e)).push(f);return this} emit(e,d){(this.map.get(e)||[]).forEach(f=>f(d))} off(e,f){const a=this.map.get(e)||[]; const i=a.indexOf(f); if(i>=0)a.splice(i,1)} clear(){this.map.clear()} }
+
+/******************** 問題バンク（例：10問） ********************/
+/** tiles: 表示候補（正解4字＋ダミー） */
+const BANK = [
+  { id:'yoji-0001', prompt:'困難に打ち勝とうと努力すること', answer:'悪戦苦闘', tiles:['悪','戦','苦','闘','奮','難'] },
+  { id:'yoji-0002', prompt:'苦労に耐え忍んで目的を達すること', answer:'臥薪嘗胆', tiles:['臥','薪','嘗','胆','胆','炭'] },
+  { id:'yoji-0003', prompt:'互いに励まし合い学問や技芸を磨くこと', answer:'切磋琢磨', tiles:['切','磋','琢','磨','砥','研'] },
+  { id:'yoji-0004', prompt:'他に頼らず自分の力だけで物事を行うさま', answer:'独立独歩', tiles:['独','立','独','歩','自','進'] },
+  { id:'yoji-0005', prompt:'公平で私心がなく正しいこと', answer:'公明正大', tiles:['公','明','正','大','清','廉'] },
+  { id:'yoji-0006', prompt:'心を一つにして協力すること', answer:'一致団結', tiles:['一','致','団','結','協','和'] },
+  { id:'yoji-0007', prompt:'始めから終わりまで矛盾がないこと', answer:'首尾一貫', tiles:['首','尾','一','貫','統','整'] },
+  { id:'yoji-0008', prompt:'世の移り変わりが激しいこと', answer:'栄枯盛衰', tiles:['栄','枯','盛','衰','滅','興'] },
+  { id:'yoji-0009', prompt:'学問や道徳を学び身につけること', answer:'修身斉家', tiles:['修','身','斉','家','治','国'] },
+  { id:'yoji-0010', prompt:'才能や学識が特に優れていること', answer:'博学多才', tiles:['博','学','多','才','才','能'] }
+];
+
+/******************** 並べ替えクイズ本体 ********************/
+class IdiomOrderEngine extends Emitter {
+  /**
+   * @param {{timeLimitSec?:number, seed?:number, allowOneRetry?:boolean}} cfg
+   */
+  constructor(cfg={}){
+    super();
+    this.cfg = { timeLimitSec: cfg.timeLimitSec ?? 8, seed: cfg.seed, allowOneRetry: !!cfg.allowOneRetry };
+    this.rng = new RNG(this.cfg.seed);
+    this.timer = null; this.left = 0; this.inRound = false; this.item = null; this.progress = [];
+    this.mistakes = 0; this.retryUsed = false;
+    this.emit('ready', { timeLimitSec:this.cfg.timeLimitSec, seed:this.rng.seed, allowOneRetry:this.cfg.allowOneRetry });
+  }
+  /**
+   * 1問開始
+   * @param {{itemId?:string, difficulty?:'easy'|'norm'|'hard'}} opts
+   */
+  startRound(opts={}){
+    if(this.inRound) this._stopTimer();
+    const item = opts.itemId ? BANK.find(x=>x.id===opts.itemId) : this.rng.pick(BANK);
+    if(!item) throw new Error('Item not found');
+
+    // 難易度で表示候補を調整（簡易実装）
+    let tiles = item.tiles.slice();
+    const need = 6; // 盤面候補数上限
+    if(opts.difficulty==='easy') tiles = item.answer.split('');
+    if(opts.difficulty==='hard'){
+      // ダミーを多めに。足りなければ似た字候補を追加（簡易）
+      const pool = tiles.concat('政府功勝勇誠盛森榮枠股狩家嘉').split?tiles:tiles; // 保険
+    }
+    // 足りない場合は適当に補充（保険）
+    while(tiles.length < need){
+      const c = this._randomKanji();
+      if(!tiles.includes(c)) tiles.push(c);
+    }
+    // 上限でカット
+    tiles = tiles.slice(0, need);
+
+    this.item = { id:item.id, prompt:item.prompt, answer:item.answer, tiles:this.rng.shuffle(tiles) };
+    this.progress = [];
+    this.mistakes = 0; this.retryUsed = false;
+    this.left = this.cfg.timeLimitSec; this.inRound = true;
+    this.emit('round', { id:this.item.id, prompt:this.item.prompt, tiles:this.item.tiles.slice(), orderLen:4, time:this.left });
+    this._startTimer();
+  }
+
+  pick(index){
+    if(!this.inRound) return;
+    const char = this.item.tiles[index];
+    const expected = this.item.answer[this.progress.length];
+    const isCorrect = (char === expected);
+
+    if(isCorrect){
+      this.progress.push(char);
+      this.emit('pick', { index, char, isCorrect:true, progress:this.progress.slice() });
+      if(this.progress.length===4){
+        this._finish({ correct:true, picked:this.progress.slice(), expected:[...this.item.answer], mistakes:this.mistakes, timeLeft:this.left, itemId:this.item.id });
+      }
+      return;
+    }
+
+    // ミス処理
+    this.mistakes++;
+    this.emit('pick', { index, char, isCorrect:false, progress:this.progress.slice() });
+    if(this.cfg.allowOneRetry && !this.retryUsed){
+      this.retryUsed = true; // 1回だけ猶予
+      return; // 継続
+    }
+    // 即終了
+    this._finish({ correct:false, picked:this.progress.slice().concat(char), expected:[...this.item.answer], mistakes:this.mistakes, timeLeft:this.left, itemId:this.item.id });
+  }
+
+  _finish(payload){
+    this._stopTimer();
+    this.inRound = false;
+    this.emit('finish', payload);
+  }
+  _startTimer(){
+    const tickMs = 100; this.emit('tick',{left:this.left});
+    this.timer = setInterval(()=>{
+      this.left = Math.max(0, +(this.left - tickMs/1000).toFixed(2));
+      this.emit('tick',{left:this.left});
+      if(this.left<=0){
+        this._finish({ correct:false, timeout:true, picked:this.progress.slice(), expected:[...this.item.answer], mistakes:this.mistakes, timeLeft:0, itemId:this.item.id });
+      }
+    }, tickMs);
+  }
+  _stopTimer(){ if(this.timer){ clearInterval(this.timer); this.timer=null } }
+  destroy(){ this._stopTimer(); this.clear(); }
+  _randomKanji(){
+    const UNI = '天地人神風林火山川海森星月花鳥雪雲雷光音学文武道正義勇気愛誠信忍智仁礼義忠孝';
+    return UNI[Math.floor(this.rng.next()*UNI.length)] || '心';
+  }
+}
+
+/******************** 以下、デモUI（統合時は差し替え可） ********************/
+const $ = sel => document.querySelector(sel);
+const statusEl = $('#status'), timerBar = $('#timerBar'), promptEl=$('#prompt'), slotsEl=$('#slots'), tilesEl=$('#tiles'), explainEl=$('#explain');
+const startBtn=$('#startBtn'), hardBtn=$('#hardBtn'), nextBtn=$('#nextBtn'), resetBtn=$('#resetBtn'), seedBtn=$('#seedBtn'), seedVal=$('#seedVal'), retryChk=$('#retryChk');
+
+let seed = null; // auto
+let engine = buildEngine();
+
+function buildEngine(){
+  const e = new IdiomOrderEngine({ timeLimitSec:8, seed, allowOneRetry: retryChk.checked });
+  e.on('ready', ({timeLimitSec, seed, allowOneRetry})=>{
+    statusEl.textContent = `Ready（制限 ${timeLimitSec}s / リトライ:${allowOneRetry?'1回':'なし'}）`;
+    seedVal.textContent = seed ?? 'auto';
+  });
+  e.on('round', ({prompt, tiles})=>{
+    promptEl.textContent = `お題：${prompt}`;
+    renderSlots(0);
+    renderTiles(tiles);
+    nextBtn.disabled = true; explainEl.textContent='';
+  });
+  e.on('tick', ({left})=>{
+    const pct = Math.max(0, Math.min(1, left/e.cfg.timeLimitSec));
+    timerBar.style.width = (pct*100)+'%';
+  });
+  e.on('pick', ({index, char, isCorrect, progress})=>{
+    const btn = tilesEl.querySelectorAll('.tile')[index];
+    if(btn){
+      btn.classList.add('used');
+      if(isCorrect){ btn.classList.add('correctPulse'); tryVibrate([15]); }
+      else { btn.style.borderColor = 'var(--danger)'; tryVibrate([40]); }
+    }
+    renderSlots(progress.length, progress);
+  });
+  e.on('finish', (p)=>{
+    nextBtn.disabled = false;
+    const ans = p.expected.join('');
+    const head = p.timeout? '時間切れ' : (p.correct? '正解！':'不正解');
+    statusEl.className = 'status ' + (p.correct? 'ok':'ng');
+    statusEl.textContent = `${head}  正解：${ans}`;
+    explainEl.textContent = meaningOf(ans);
+  });
+  return e;
+}
+
+function meaningOf(ans){
+  const item = BANK.find(b=>b.answer===ans);
+  return item? `${ans}：${item.prompt}` : '';
+}
+
+function renderSlots(progressLen, progress=[]){
+  slotsEl.innerHTML = '';
+  for(let i=0;i<4;i++){
+    const s = document.createElement('div');
+    s.className = 'slot';
+    s.textContent = progress[i] || '□';
+    slotsEl.appendChild(s);
+  }
+}
+
+function renderTiles(tiles){
+  tilesEl.innerHTML = '';
+  tiles.forEach((ch, i)=>{
+    const b = document.createElement('button');
+    b.className = 'tile'; b.textContent = ch;
+    b.onclick = ()=> engine.pick(i);
+    tilesEl.appendChild(b);
+  });
+}
+
+// UI操作
+startBtn.onclick = ()=> engine.startRound({ difficulty:'norm' });
+hardBtn.onclick  = ()=> engine.startRound({ difficulty:'hard' });
+nextBtn.onclick  = ()=> engine.startRound({ difficulty:'norm' });
+resetBtn.onclick = ()=> {
+  engine.destroy(); engine = buildEngine(); timerBar.style.width='100%';
+  promptEl.textContent = 'お題がここに表示されます。'; slotsEl.innerHTML=''; tilesEl.innerHTML=''; explainEl.textContent='';
+};
+seedBtn.onclick = ()=>{ seed = (seed===null)? Math.floor(Math.random()*1e6): null; seedVal.textContent = seed ?? 'auto'; resetBtn.click(); };
+retryChk.onchange = ()=> resetBtn.click();
+
+function tryVibrate(pattern){ if(navigator.vibrate) try{ navigator.vibrate(pattern) }catch(_){} }
+
+</script>
+</body>
+</html>
